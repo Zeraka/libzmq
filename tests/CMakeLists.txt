@@ -73,6 +73,7 @@ set(tests
     test_socket_null
     test_reconnect_ivl
     test_reconnect_options
+    test_tcp_accept_filter
     test_mock_pub_sub)
 
 if(NOT WIN32)
@@ -160,7 +161,11 @@ if(ENABLE_DRAFTS)
     test_channel
     test_hello_msg
     test_disconnect_msg
+    test_hiccup_msg
   )
+  if(ZMQ_HAVE_BUSY_POLL)
+    list(APPEND tests test_busy_poll)
+  endif()
 endif()
 
 if(ZMQ_HAVE_WS)

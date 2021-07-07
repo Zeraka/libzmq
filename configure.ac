@@ -51,9 +51,11 @@ AC_SUBST(PACKAGE_VERSION)
 # ZeroMQ version 4.3.1: 7:1:2 (ABI version 5)
 # ZeroMQ version 4.3.2: 7:2:2 (ABI version 5)
 # ZeroMQ version 4.3.3: 7:3:2 (ABI version 5)
+# ZeroMQ version 4.3.4: 7:4:2 (ABI version 5)
+# ZeroMQ version 4.3.5: 7:5:2 (ABI version 5)
 #
 # libzmq -version-info current:revision:age
-LTVER="7:3:2"
+LTVER="7:5:2"
 AC_SUBST(LTVER)
 
 # Take a copy of original flags
@@ -63,7 +65,7 @@ ZMQ_ORIG_CXXFLAGS="${CXXFLAGS:-none}"
 
 # Checks for programs.
 AC_PROG_CC
-AX_CHECK_COMPILE_FLAG([-std=gnu11], [CFLAGS+=" -std=gnu11"], [AC_PROG_CC_C99])
+AX_CHECK_COMPILE_FLAG([-std=c11], [CFLAGS+=" -std=c11"], [AC_PROG_CC_C99])
 AC_PROG_CXX
 AX_CODE_COVERAGE
 AM_PROG_CC_C_O
@@ -787,6 +789,25 @@ AC_COMPILE_IFELSE(
 		AC_MSG_RESULT([no])
 ])
 
+AC_MSG_CHECKING([whether if_nametoindex is available])
+AC_COMPILE_IFELSE(
+    [AC_LANG_PROGRAM([[
+        #ifdef _WIN32
+        #include <iphlpapi.h>
+        #else
+        #include <sys/types.h>
+        #include <sys/socket.h>
+        #include <net/if.h>
+        #endif]], [[
+        if_nametoindex("");
+    ]])],[
+        AC_MSG_RESULT([yes])
+        AC_DEFINE(HAVE_IF_NAMETOINDEX, [1],
+        [if_nametoindex is available])
+    ],[
+        AC_MSG_RESULT([no])
+])
+
 AC_ARG_ENABLE([libbsd],
     [AS_HELP_STRING([--enable-libbsd],
         [enable libbsd [default=auto]])],
@@ -811,20 +832,18 @@ if test "x$enable_libbsd" != "xno"; then
             fi
         ])
 fi
-if test "x$found_libbsd" != "xyes"; then
-    AC_MSG_CHECKING([whether strlcpy is available])
-    AC_COMPILE_IFELSE(
-        [AC_LANG_PROGRAM(
-            [[#include <string.h>]],
-            [[char buf [100]; size_t bar = strlcpy (buf, "foo", 100); (void)bar; return 0;]])
-        ],[
-            AC_MSG_RESULT([yes])
-            AC_DEFINE(ZMQ_HAVE_STRLCPY, [1],
-                [strlcpy is available])
-        ],[
-            AC_MSG_RESULT([no])
-    ])
-fi
+AC_MSG_CHECKING([whether strlcpy is available])
+AC_COMPILE_IFELSE(
+    [AC_LANG_PROGRAM(
+        [[#include <string.h>]],
+        [[char buf [100]; size_t bar = strlcpy (buf, "foo", 100); (void)bar; return 0;]])
+    ],[
+        AC_MSG_RESULT([yes])
+        AC_DEFINE(ZMQ_HAVE_STRLCPY, [1],
+            [strlcpy is available])
+    ],[
+        AC_MSG_RESULT([no])
+])
 
 # pthread_setname is non-posix, and there are at least 4 different implementations
 AC_MSG_CHECKING([whether signature of pthread_setname_np() has 1 argument])
@@ -939,6 +958,12 @@ LIBZMQ_CHECK_TCP_KEEPALIVE([
     AC_DEFINE([ZMQ_HAVE_TCP_KEEPALIVE],
         [1],
         [Whether TCP_KEEPALIVE is supported.])
+    ])
+
+LIBZMQ_CHECK_SO_PRIORITY([
+    AC_DEFINE([ZMQ_HAVE_SO_PRIORITY],
+        [1],
+        [Whether SO_PRIORITY is supported.])
     ])
 
 LIBZMQ_CHECK_GETRANDOM([

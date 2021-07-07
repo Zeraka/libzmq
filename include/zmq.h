@@ -41,7 +41,7 @@
 /*  Version macros for compile-time API version detection                     */
 #define ZMQ_VERSION_MAJOR 4
 #define ZMQ_VERSION_MINOR 3
-#define ZMQ_VERSION_PATCH 3
+#define ZMQ_VERSION_PATCH 5
 
 #define ZMQ_MAKE_VERSION(major, minor, patch)                                  \
     ((major) *10000 + (minor) *100 + (patch))
@@ -57,21 +57,6 @@ extern "C" {
 #endif
 #include <stddef.h>
 #include <stdio.h>
-#if defined _WIN32
-//  Set target version to Windows Server 2008, Windows Vista or higher.
-//  Windows XP (0x0501) is supported but without client & server socket types.
-#ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x0600
-#endif
-
-#ifdef __MINGW32__
-//  Require Windows XP or higher with MinGW for getaddrinfo().
-#if (_WIN32_WINNT >= 0x0501)
-#else
-#error You need at least Windows XP target
-#endif
-#endif
-#endif
 
 /*  Handle DSO symbol visibility                                             */
 #if defined _WIN32
@@ -252,7 +237,8 @@ typedef struct zmq_msg_t
 {
 #if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))
     __declspec(align (8)) unsigned char _[64];
-#elif defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_ARM_ARMV7VE))
+#elif defined(_MSC_VER)                                                        \
+  && (defined(_M_IX86) || defined(_M_ARM_ARMV7VE) || defined(_M_ARM))
     __declspec(align (4)) unsigned char _[64];
 #elif defined(__GNUC__) || defined(__INTEL_COMPILER)                           \
   || (defined(__SUNPRO_C) && __SUNPRO_C >= 0x590)                              \
@@ -681,10 +667,14 @@ ZMQ_EXPORT void zmq_threadclose (void *thread_);
 #define ZMQ_RECONNECT_STOP 109
 #define ZMQ_HELLO_MSG 110
 #define ZMQ_DISCONNECT_MSG 111
+#define ZMQ_PRIORITY 112
+#define ZMQ_BUSY_POLL 113
+#define ZMQ_HICCUP_MSG 114
 
 /*  DRAFT ZMQ_RECONNECT_STOP options                                          */
 #define ZMQ_RECONNECT_STOP_CONN_REFUSED 0x1
 #define ZMQ_RECONNECT_STOP_HANDSHAKE_FAILED 0x2
+#define ZMQ_RECONNECT_STOP_AFTER_DISCONNECT 0x4
 
 /*  DRAFT Context options                                                     */
 #define ZMQ_ZERO_COPY_RECV 10
