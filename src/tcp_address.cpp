@@ -1,31 +1,4 @@
-/*
-    Copyright (c) 2007-2016 Contributors as noted in the AUTHORS file
-
-    This file is part of libzmq, the ZeroMQ core engine in C++.
-
-    libzmq is free software; you can redistribute it and/or modify it under
-    the terms of the GNU Lesser General Public License (LGPL) as published
-    by the Free Software Foundation; either version 3 of the License, or
-    (at your option) any later version.
-
-    As a special exception, the Contributors give you permission to link
-    this library with independent modules to produce an executable,
-    regardless of the license terms of these independent modules, and to
-    copy and distribute the resulting executable under terms of your choice,
-    provided that you also meet, for each linked independent module, the
-    terms and conditions of the license of that module. An independent
-    module is a module which is not derived from or based on this library.
-    If you modify this library, you must extend this exception to your
-    version of the library.
-
-    libzmq is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public
-    License for more details.
-
-    You should have received a copy of the GNU Lesser General Public License
-    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*/
+/* SPDX-License-Identifier: MPL-2.0 */
 
 #include "precompiled.hpp"
 #include <string>
@@ -102,7 +75,7 @@ int zmq::tcp_address_t::resolve (const char *name_, bool local_, bool ipv6_)
     ip_resolver_options_t resolver_opts;
 
     resolver_opts.bindable (local_)
-      .allow_dns (!local_)
+      .allow_dns (true)
       .allow_nic_name (local_)
       .ipv6 (ipv6_)
       .expect_port (true);
@@ -129,7 +102,9 @@ static std::string make_address_string (const char *hbuf_,
     pos += hbuf_len;
     memcpy (pos, ipv6_suffix_, sizeof ipv6_suffix_ - 1);
     pos += sizeof ipv6_suffix_ - 1;
-    pos += sprintf (pos, "%d", ntohs (port_));
+    int res = snprintf (pos, max_port_str_length + 1, "%d", ntohs (port_));
+    zmq_assert (res > 0 && res < (int) (max_port_str_length + 1));
+    pos += res;
     return std::string (buf, pos - buf);
 }
 
@@ -203,11 +178,6 @@ zmq::tcp_address_mask_t::tcp_address_mask_t () : _address_mask (-1)
     memset (&_network_address, 0, sizeof (_network_address));
 }
 
-int zmq::tcp_address_mask_t::mask () const
-{
-    return _address_mask;
-}
-
 int zmq::tcp_address_mask_t::resolve (const char *name_, bool ipv6_)
 {
     // Find '/' at the end that separates address from the cidr mask number.
@@ -261,53 +231,6 @@ int zmq::tcp_address_mask_t::resolve (const char *name_, bool ipv6_)
         _address_mask = static_cast<int> (mask);
     }
 
-    return 0;
-}
-
-int zmq::tcp_address_mask_t::to_string (std::string &addr_) const
-{
-    if (_network_address.family () != AF_INET
-        && _network_address.family () != AF_INET6) {
-        addr_.clear ();
-        return -1;
-    }
-    if (_address_mask == -1) {
-        addr_.clear ();
-        return -1;
-    }
-
-    char hbuf[NI_MAXHOST];
-    const int rc = getnameinfo (_network_address.as_sockaddr (),
-                                _network_address.sockaddr_len (), hbuf,
-                                sizeof (hbuf), NULL, 0, NI_NUMERICHOST);
-    if (rc != 0) {
-        addr_.clear ();
-        return rc;
-    }
-
-    const size_t max_mask_len = 4;
-    const char ipv6_prefix[] = "[";
-    const char ipv6_suffix[] = "]/";
-    const char ipv4_suffix[] = "/";
-    char
-      buf[NI_MAXHOST + sizeof ipv6_prefix + sizeof ipv6_suffix + max_mask_len];
-    char *pos = buf;
-    if (_network_address.family () == AF_INET6) {
-        memcpy (pos, ipv6_prefix, sizeof ipv6_prefix - 1);
-        pos += sizeof ipv6_prefix - 1;
-    }
-    const size_t hbuf_len = strlen (hbuf);
-    memcpy (pos, hbuf, hbuf_len);
-    pos += hbuf_len;
-    if (_network_address.family () == AF_INET6) {
-        memcpy (pos, ipv6_suffix, sizeof ipv6_suffix - 1);
-        pos += sizeof ipv6_suffix - 1;
-    } else {
-        memcpy (pos, ipv4_suffix, sizeof ipv4_suffix - 1);
-        pos += sizeof ipv4_suffix - 1;
-    }
-    pos += sprintf (pos, "%d", _address_mask);
-    addr_.assign (buf, pos - buf);
     return 0;
 }
 

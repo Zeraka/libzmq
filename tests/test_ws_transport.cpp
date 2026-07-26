@@ -1,31 +1,4 @@
-/*
-    Copyright (c) 2007-2016 Contributors as noted in the AUTHORS file
-
-    This file is part of libzmq, the ZeroMQ core engine in C++.
-
-    libzmq is free software; you can redistribute it and/or modify it under
-    the terms of the GNU Lesser General Public License (LGPL) as published
-    by the Free Software Foundation; either version 3 of the License, or
-    (at your option) any later version.
-
-    As a special exception, the Contributors give you permission to link
-    this library with independent modules to produce an executable,
-    regardless of the license terms of these independent modules, and to
-    copy and distribute the resulting executable under terms of your choice,
-    provided that you also meet, for each linked independent module, the
-    terms and conditions of the license of that module. An independent
-    module is a module which is not derived from or based on this library.
-    If you modify this library, you must extend this exception to your
-    version of the library.
-
-    libzmq is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public
-    License for more details.
-
-    You should have received a copy of the GNU Lesser General Public License
-    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*/
+/* SPDX-License-Identifier: MPL-2.0 */
 
 #include <string.h>
 #include "testutil.hpp"
@@ -47,7 +20,8 @@ void test_roundtrip ()
       zmq_getsockopt (sb, ZMQ_LAST_ENDPOINT, bind_address, &addr_length));
 
     // Windows can't connect to 0.0.0.0
-    sprintf (connect_address, "ws://127.0.0.1%s", strrchr (bind_address, ':'));
+    snprintf (connect_address, MAX_SOCKET_STRING * sizeof (char),
+              "ws://127.0.0.1%s", strrchr (bind_address, ':'));
 
     TEST_ASSERT_SUCCESS_ERRNO (zmq_connect (sc, connect_address));
 
@@ -271,6 +245,33 @@ void test_mask_shared_msg ()
     test_context_socket_close (sb);
 }
 
+void test_pub_sub ()
+{
+    char connect_address[MAX_SOCKET_STRING];
+    size_t addr_length = sizeof (connect_address);
+    void *sb = test_context_socket (ZMQ_XPUB);
+    TEST_ASSERT_SUCCESS_ERRNO (zmq_bind (sb, "ws://127.0.0.1:*"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zmq_getsockopt (sb, ZMQ_LAST_ENDPOINT, connect_address, &addr_length));
+
+    void *sc = test_context_socket (ZMQ_SUB);
+    TEST_ASSERT_SUCCESS_ERRNO (zmq_setsockopt (sc, ZMQ_SUBSCRIBE, "A", 1));
+    TEST_ASSERT_SUCCESS_ERRNO (zmq_setsockopt (sc, ZMQ_SUBSCRIBE, "B", 1));
+    TEST_ASSERT_SUCCESS_ERRNO (zmq_connect (sc, connect_address));
+
+    recv_string_expect_success (sb, "\1A", 0);
+    recv_string_expect_success (sb, "\1B", 0);
+
+    send_string_expect_success (sb, "A", 0);
+    send_string_expect_success (sb, "B", 0);
+
+    recv_string_expect_success (sc, "A", 0);
+    recv_string_expect_success (sc, "B", 0);
+
+    test_context_socket_close (sc);
+    test_context_socket_close (sb);
+}
+
 
 int main ()
 {
@@ -283,6 +284,7 @@ int main ()
     RUN_TEST (test_large_message);
     RUN_TEST (test_heartbeat);
     RUN_TEST (test_mask_shared_msg);
+    RUN_TEST (test_pub_sub);
 
     if (zmq_has ("curve"))
         RUN_TEST (test_curve);

@@ -51,9 +51,12 @@ AC_SUBST(PACKAGE_VERSION)
 # ZeroMQ version 4.3.1: 7:1:2 (ABI version 5)
 # ZeroMQ version 4.3.2: 7:2:2 (ABI version 5)
 # ZeroMQ version 4.3.3: 7:3:2 (ABI version 5)
+# ZeroMQ version 4.3.4: 7:4:2 (ABI version 5)
+# ZeroMQ version 4.3.5: 7:5:2 (ABI version 5)
+# ZeroMQ version 4.3.6: 7:6:2 (ABI version 5)
 #
 # libzmq -version-info current:revision:age
-LTVER="7:3:2"
+LTVER="7:6:2"
 AC_SUBST(LTVER)
 
 # Take a copy of original flags
@@ -63,7 +66,7 @@ ZMQ_ORIG_CXXFLAGS="${CXXFLAGS:-none}"
 
 # Checks for programs.
 AC_PROG_CC
-AX_CHECK_COMPILE_FLAG([-std=gnu11], [CFLAGS+=" -std=gnu11"], [AC_PROG_CC_C99])
+AX_CHECK_COMPILE_FLAG([-std=c11], [CFLAGS="${CFLAGS} -std=c11 -D_DEFAULT_SOURCE"], [AC_PROG_CC_C99])
 AC_PROG_CXX
 AX_CODE_COVERAGE
 AM_PROG_CC_C_O
@@ -73,10 +76,6 @@ PKG_PROG_PKG_CONFIG
 m4_pattern_forbid([^PKG_[A-Z_]+$], [missing some pkg-config macros (pkg-config package)])
 
 # Libtool configuration for different targets. See acinclude.m4
-AC_ARG_VAR([XMLTO], [path to xmlto command])
-AC_PATH_PROG([XMLTO], [xmlto])
-AC_ARG_VAR([ASCIIDOC], [path to asciidoc command])
-AC_PATH_PROG([ASCIIDOC], [asciidoc])
 LIBZMQ_CONFIG_LIBTOOL
 AC_LIBTOOL_WIN32_DLL
 AC_PROG_LIBTOOL
@@ -88,8 +87,8 @@ AC_ARG_ENABLE([force-CXX98-compat],
     [AS_HELP_STRING([--enable-force-CXX98-compat], [force C++98 build [default=disabled]])])
 if test "x$enable_force_CXX98_compat" = "xyes"; then
     AC_LANG_PUSH([C++])
-    AX_CHECK_COMPILE_FLAG([-std=gnu++98], [CXXFLAGS+=" -std=gnu++98"], [])
-    AX_CHECK_COMPILE_FLAG([-Wc++98-compat -Wc++98-compat-pedantic], [CXXFLAGS+=" -Wc++98-compat"], [])
+    AX_CHECK_COMPILE_FLAG([-std=gnu++98], [CXXFLAGS="${CXXFLAGS} -std=gnu++98"], [])
+    AX_CHECK_COMPILE_FLAG([-Wc++98-compat -Wc++98-compat-pedantic], [CXXFLAGS="${CXXFLAGS} -Wc++98-compat"], [])
     AC_LANG_POP([C++])
 else
     AX_CXX_COMPILE_STDCXX_11([ext], [optional])
@@ -128,6 +127,25 @@ AC_RUN_IFELSE(
     [libzmq_tipc_support=no])
 
 AC_MSG_RESULT([$libzmq_tipc_support])
+
+
+# check vsock support
+AC_MSG_CHECKING([if vsock is available ])
+
+AC_RUN_IFELSE(
+    [AC_LANG_PROGRAM([[
+            #include <sys/socket.h>
+            #include <linux/vm_sockets.h>
+        ]],[[
+            return AF_VSOCK == 0 || VMADDR_CID_LOCAL == 0;
+        ]])
+    ],
+    [libzmq_vsock_support=yes],
+    [libzmq_vsock_support=no],
+    [libzmq_vsock_support=no])
+
+AC_MSG_RESULT([$libzmq_vsock_support])
+
 
 AC_ARG_ENABLE([pedantic],
     [AS_HELP_STRING([--disable-pedantic], [disable pedantic compiler checks [default=enabled]])],
@@ -236,6 +254,10 @@ case "${host_os}" in
         if test "x$libzmq_tipc_support" = "xyes"; then
             AC_DEFINE(ZMQ_HAVE_TIPC, 1, [Have TIPC support])
         fi
+
+        if test "x$libzmq_vsock_support" = "xyes"; then
+            AC_DEFINE(ZMQ_HAVE_VSOCK, 1, [Have vsock support])
+        fi
         case "${host_os}" in
             *android*)
                 AC_DEFINE(ZMQ_HAVE_ANDROID, 1, [Have Android OS])
@@ -306,6 +328,27 @@ case "${host_os}" in
         if test "x$libzmq_netbsd_has_atomic" = "xno"; then
             AC_DEFINE(ZMQ_FORCE_MUTEXES, 1, [Force to use mutexes])
         fi
+        # NetBSD Current (to become 10) has changed the type of udata in it's
+        # kevent struct from intptr_t to void * to align with darwin and other
+        # BSDs, see upstream commit:
+        # https://github.com/NetBSD/src/commit/e5ead823eb916b56589d2c6c560dbcfe4a2d0afc
+        AC_MSG_CHECKING([whether kevent udata type is intptr_t])
+        AC_LANG_PUSH([C++])
+        AC_LINK_IFELSE([AC_LANG_PROGRAM(
+            [[#include <sys/types.h>
+              #include <sys/event.h>
+              #include <sys/time.h>]],
+            [[struct kevent ev;
+              intptr_t udata;
+              EV_SET(&ev, 0, 0, EV_ADD, 0, 0, udata);
+              return 0;]])],
+            [libzmq_netbsd_kevent_udata_intptr_t=yes],
+            [libzmq_netbsd_kevent_udata_intptr_t=no])
+        AC_LANG_POP([C++])
+        AC_MSG_RESULT([$libzmq_netbsd_kevent_udata_intptr_t])
+        if test "x$libzmq_netbsd_kevent_udata_intptr_t" = "xyes"; then
+            AC_DEFINE(ZMQ_NETBSD_KEVENT_UDATA_INTPTR_T, 1, [kevent udata type is intptr_t])
+        fi
         ;;
     *openbsd*|*bitrig*)
         # Define on OpenBSD to enable all library features
@@ -342,7 +385,7 @@ case "${host_os}" in
 
         if test "x$enable_static" = "xyes"; then
             CPPFLAGS="-DZMQ_STATIC $CPPFLAGS"
-            PKGCFG_LIBS_PRIVATE="$PKGCFG_LIBS_PRIVATE -liphlpapi"
+            PKGCFG_LIBS_PRIVATE="$PKGCFG_LIBS_PRIVATE -liphlpapi -lws2_32"
         fi
 	# Set FD_SETSIZE to 16384
 	CPPFLAGS=" -DFD_SETSIZE=16384 $CPPFLAGS"
@@ -413,6 +456,9 @@ LIBZMQ_CHECK_DOC_BUILD
 
 # Check polling system, set appropriate macro in src/platform.hpp
 LIBZMQ_CHECK_POLLER
+
+# Check for pselect to activate ppoll, set appropriate macro in src/platform.hpp
+LIBZMQ_CHECK_PPOLL
 
 # Check cacheline size, set appropriate macro in src/platform.hpp
 LIBZMQ_CHECK_CACHELINE
@@ -532,12 +578,12 @@ if test "x$have_gssapi_library" = "xyes"; then
 fi
 AM_CONDITIONAL(BUILD_GSSAPI, test "x$have_gssapi_library" = "xyes")
 
-# Select curve encryption library, defaults to tweetnacl
+# Select curve encryption library, defaults to disabled
 # To use libsodium instead, use --with-libsodium (must be installed)
 # To disable curve, use --disable-curve
 
 AC_ARG_WITH([libsodium],
-    [AS_HELP_STRING([--with-libsodium], [use libsodium instead of built-in tweetnacl [default=no]])])
+    [AS_HELP_STRING([--with-libsodium], [use libsodium [default=no]])])
 
 AS_IF([test "x$with_libsodium" = "xyes"], [
     PKG_CHECK_MODULES([sodium], [libsodium], [libsodium_found=yes], [
@@ -548,6 +594,20 @@ AS_IF([test "x$with_libsodium" = "xyes"], [
 AC_ARG_ENABLE([curve],
     [AS_HELP_STRING([--disable-curve], [disable CURVE security [default=no]])])
 
+AC_ARG_ENABLE(
+    [libsodium_randombytes_close],
+    [AS_HELP_STRING(
+        [--disable-libsodium_randombytes_close],
+        [Do not call libsodium randombytes_close() when terminating contexts.
+        If disabled, may leave one FD open on /dev/urandom
+        until randombytes_close() is called explicitly,
+        but fixes a crash when multiple contexts are used with CURVE.
+        Has no effect when getrandom() is available. [default=enabled]]
+    )],
+    [],
+    [enable_libsodium_randombytes_close=yes]
+)
+
 if test "x$enable_curve" = "xno"; then
     curve_library=""
     AC_MSG_NOTICE([CURVE security is disabled])
@@ -556,6 +616,12 @@ elif test "x$with_libsodium" = "xyes"; then
     AC_MSG_NOTICE([Using libsodium for CURVE security])
     AC_DEFINE(ZMQ_HAVE_CURVE, [1], [Using curve encryption])
     AC_DEFINE(ZMQ_USE_LIBSODIUM, [1], [Using libsodium for curve encryption])
+    if test "x$enable_libsodium_randombytes_close" = "xyes"; then
+        AC_DEFINE(ZMQ_LIBSODIUM_RANDOMBYTES_CLOSE, [1], [Automatically close libsodium randombytes. Not threadsafe without getrandom()])
+    else
+        AC_MSG_NOTICE([Disabling libsodium randombytes_close(). randombytes_close() may need to be called in application code.])
+    fi
+
     curve_library="libsodium"
     enable_curve="yes"
 
@@ -574,18 +640,11 @@ elif test "x$with_libsodium" = "xyes"; then
     esac
 
     PKGCFG_NAMES_PRIVATE="$PKGCFG_NAMES_PRIVATE libsodium"
-else
-    AC_MSG_NOTICE([Using tweetnacl for CURVE security])
-    AC_DEFINE(ZMQ_HAVE_CURVE, [1], [Using curve encryption])
-    AC_DEFINE(ZMQ_USE_TWEETNACL, [1], [Using tweetnacl for curve encryption])
-    curve_library="tweetnacl"
-    enable_curve="yes"
 fi
 
 AM_CONDITIONAL(ENABLE_CURVE_KEYGEN, test "x$enable_curve" = "xyes" -a "x$zmq_enable_curve_keygen" = "xyes")
 
 AM_CONDITIONAL(USE_LIBSODIUM, test "$curve_library" = "libsodium")
-AM_CONDITIONAL(USE_TWEETNACL, test "$curve_library" = "tweetnacl")
 AM_CONDITIONAL(HAVE_CURVE, test "x$curve_library" != "x")
 AM_CONDITIONAL(USE_WEPOLL, test "$poller" = "wepoll")
 
@@ -628,7 +687,7 @@ if test "x$enable_ws" != "xno"; then
     else
         AC_DEFINE(ZMQ_HAVE_WS, [1], [Using websocket])
         AC_DEFINE(ZMQ_USE_BUILTIN_SHA1, [1], [Using built-in sha1])
-        AC_MSG_NOTICE(Using builting SHA1)
+        AC_MSG_NOTICE(Using built-in SHA1)
         ws_crypto_library="builtin"
     fi
 fi
@@ -667,6 +726,11 @@ fi
 
 if test "x$have_pgm_library" = "xyes"; then
     AC_DEFINE(ZMQ_HAVE_OPENPGM, [1], [Have OpenPGM extension])
+    # When using CXX98 mode 'restrict will not be defined, so redefine it, as it
+    # is used in the PGM headers
+    if test "x$enable_force_CXX98_compat" = "xyes"; then
+        CPPFLAGS="-Drestrict=__restrict__ $CPPFLAGS"
+    fi
 fi
 
 AM_CONDITIONAL(HAVE_PGM, test "x$have_pgm_library" = "xyes")
@@ -733,6 +797,7 @@ fi
 
 AM_CONDITIONAL(HAVE_VMCI, test "x$have_vmci_ext" != "xno")
 
+
 # Set -Wall, -Werror and -pedantic
 AC_LANG_PUSH([C++])
 
@@ -748,6 +813,7 @@ if test "x$libzmq_pedantic" = "xyes"; then
 fi
 AC_LANG_POP([C++])
 
+AM_CONDITIONAL(BUILD_VSOCK, test "x$libzmq_vsock_support" = "xyes")
 AM_CONDITIONAL(BUILD_TIPC, test "x$libzmq_tipc_support" = "xyes")
 AM_CONDITIONAL(ON_MINGW, test "x$libzmq_on_mingw" = "xyes")
 AM_CONDITIONAL(ON_CYGWIN, test "x$libzmq_on_cygwin" = "xyes")
@@ -758,7 +824,7 @@ AM_CONDITIONAL(ON_GNU, test "x$libzmq_on_gnu" = "xyes")
 # Check for __atomic_Xxx compiler intrinsics
 AC_LANG_PUSH([C++])
 AX_CHECK_COMPILE_FLAG([-Watomic-alignment],
-    [CXXFLAGS+=" -Wno-atomic-alignment"],
+    [CXXFLAGS="${CXXFLAGS} -Wno-atomic-alignment"],
     [],
     [-Werror])
 LIBZMQ_CHECK_ATOMIC_INTRINSICS([
@@ -770,8 +836,23 @@ AC_LANG_POP([C++])
 
 # Checks for library functions.
 AC_TYPE_SIGNAL
-AC_CHECK_FUNCS(perror gettimeofday clock_gettime memset socket getifaddrs freeifaddrs fork mkdtemp accept4)
+AC_CHECK_FUNCS(perror gettimeofday clock_gettime memset socket getifaddrs freeifaddrs mkdtemp accept4)
 AC_CHECK_HEADERS([alloca.h])
+
+# AC_CHECK_FUNCS(fork) fails on gcc 7
+AC_MSG_CHECKING([whether fork is available])
+AC_COMPILE_IFELSE(
+	[AC_LANG_PROGRAM(
+		[[#include <unistd.h>]],
+		[[return fork();]])
+	],[
+		AC_MSG_RESULT([yes])
+		AC_DEFINE(HAVE_FORK, [1], [fork is available])
+		AM_CONDITIONAL(HAVE_FORK, true)
+	],[
+		AC_MSG_RESULT([no])
+		AM_CONDITIONAL(HAVE_FORK, false)
+])
 
 # string.h doesn't seem to be included by default in Fedora 30
 AC_MSG_CHECKING([whether strnlen is available])
@@ -785,6 +866,25 @@ AC_COMPILE_IFELSE(
 		    [strnlen is available])
 	],[
 		AC_MSG_RESULT([no])
+])
+
+AC_MSG_CHECKING([whether if_nametoindex is available])
+AC_COMPILE_IFELSE(
+    [AC_LANG_PROGRAM([[
+        #ifdef _WIN32
+        #include <iphlpapi.h>
+        #else
+        #include <sys/types.h>
+        #include <sys/socket.h>
+        #include <net/if.h>
+        #endif]], [[
+        if_nametoindex("");
+    ]])],[
+        AC_MSG_RESULT([yes])
+        AC_DEFINE(HAVE_IF_NAMETOINDEX, [1],
+        [if_nametoindex is available])
+    ],[
+        AC_MSG_RESULT([no])
 ])
 
 AC_ARG_ENABLE([libbsd],
@@ -811,20 +911,18 @@ if test "x$enable_libbsd" != "xno"; then
             fi
         ])
 fi
-if test "x$found_libbsd" != "xyes"; then
-    AC_MSG_CHECKING([whether strlcpy is available])
-    AC_COMPILE_IFELSE(
-        [AC_LANG_PROGRAM(
-            [[#include <string.h>]],
-            [[char buf [100]; size_t bar = strlcpy (buf, "foo", 100); (void)bar; return 0;]])
-        ],[
-            AC_MSG_RESULT([yes])
-            AC_DEFINE(ZMQ_HAVE_STRLCPY, [1],
-                [strlcpy is available])
-        ],[
-            AC_MSG_RESULT([no])
-    ])
-fi
+AC_MSG_CHECKING([whether strlcpy is available])
+AC_COMPILE_IFELSE(
+    [AC_LANG_PROGRAM(
+        [[#include <string.h>]],
+        [[char buf [100]; size_t bar = strlcpy (buf, "foo", 100); (void)bar; return 0;]])
+    ],[
+        AC_MSG_RESULT([yes])
+        AC_DEFINE(ZMQ_HAVE_STRLCPY, [1],
+            [strlcpy is available])
+    ],[
+        AC_MSG_RESULT([no])
+])
 
 # pthread_setname is non-posix, and there are at least 4 different implementations
 AC_MSG_CHECKING([whether signature of pthread_setname_np() has 1 argument])
@@ -941,13 +1039,17 @@ LIBZMQ_CHECK_TCP_KEEPALIVE([
         [Whether TCP_KEEPALIVE is supported.])
     ])
 
+LIBZMQ_CHECK_SO_PRIORITY([
+    AC_DEFINE([ZMQ_HAVE_SO_PRIORITY],
+        [1],
+        [Whether SO_PRIORITY is supported.])
+    ])
+
 LIBZMQ_CHECK_GETRANDOM([
     AC_DEFINE([ZMQ_HAVE_GETRANDOM],
         [1],
         [Whether getrandom is supported.])
     ])
-
-AM_CONDITIONAL(HAVE_FORK, test "x$ac_cv_func_fork" = "xyes")
 
 if test "x$cross_compiling" = "xyes"; then
     #   Enable draft by default when cross-compiling
@@ -1060,12 +1162,12 @@ AM_CONDITIONAL(FUZZING_ENGINE_LIB, test "x$FUZZING_ENGINE_LIB" != "x")
 # clang 6 has a warning that does not make sense on multi-platform code
 AC_LANG_PUSH([C])
 AX_CHECK_COMPILE_FLAG([-Wtautological-constant-compare],
-    [CFLAGS+=" -Wno-tautological-constant-compare"],
+    [CFLAGS="${CFLAGS} -Wno-tautological-constant-compare"],
     [],
     [-Werror])
 AC_LANG_POP([C])
 AX_CHECK_COMPILE_FLAG([-Wtautological-constant-compare],
-    [CXXFLAGS+=" -Wno-tautological-constant-compare"],
+    [CXXFLAGS="${CXXFLAGS} -Wno-tautological-constant-compare"],
     [],
     [-Werror])
 
@@ -1074,12 +1176,12 @@ AX_CHECK_COMPILE_FLAG([-Wtautological-constant-compare],
 # E: lto-no-text-in-archive
 AC_LANG_PUSH([C])
 AX_CHECK_COMPILE_FLAG([-ffat-lto-objects],
-    [CFLAGS+=" -ffat-lto-objects"],
+    [CFLAGS="${CFLAGS} -ffat-lto-objects"],
     [],
     [-Werror])
 AC_LANG_POP([C])
 AX_CHECK_COMPILE_FLAG([-ffat-lto-objects],
-    [CXXFLAGS+=" -ffat-lto-objects"],
+    [CXXFLAGS="${CXXFLAGS} -ffat-lto-objects"],
     [],
     [-Werror])
 
@@ -1101,6 +1203,11 @@ AC_ARG_WITH([pkgconfigdir],
     [pkgconfigdir="$withval"],
     [pkgconfigdir='${libdir}/pkgconfig'])
 AC_SUBST([pkgconfigdir])
+
+AC_ARG_ENABLE([no-export],
+    [AS_HELP_STRING([--enable-no-export],
+        [Build libzmq with empty ZMQ_EXPORT macro, bypassing platform-based automated detection [default=no]])],
+    [CPPFLAGS="-DZMQ_NO_EXPORT $CPPFLAGS"])
 
 AC_CONFIG_FILES([ \
     Makefile \

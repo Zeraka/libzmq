@@ -1,31 +1,4 @@
-/*
-    Copyright (c) 2007-2016 Contributors as noted in the AUTHORS file
-
-    This file is part of libzmq, the ZeroMQ core engine in C++.
-
-    libzmq is free software; you can redistribute it and/or modify it under
-    the terms of the GNU Lesser General Public License (LGPL) as published
-    by the Free Software Foundation; either version 3 of the License, or
-    (at your option) any later version.
-
-    As a special exception, the Contributors give you permission to link
-    this library with independent modules to produce an executable,
-    regardless of the license terms of these independent modules, and to
-    copy and distribute the resulting executable under terms of your choice,
-    provided that you also meet, for each linked independent module, the
-    terms and conditions of the license of that module. An independent
-    module is a module which is not derived from or based on this library.
-    If you modify this library, you must extend this exception to your
-    version of the library.
-
-    libzmq is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public
-    License for more details.
-
-    You should have received a copy of the GNU Lesser General Public License
-    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*/
+/* SPDX-License-Identifier: MPL-2.0 */
 
 #include "precompiled.hpp"
 #include <new>
@@ -76,10 +49,24 @@
 #ifdef ZMQ_HAVE_WSS
 #include "wss_address.hpp"
 #endif
+
+#if defined ZMQ_HAVE_VSOCK
+// fix header conflict with VMCI
+#define sockaddr_vm linux_sockaddr_vm
+#define VMADDR_PORT_ANY LINUX_VMADDR_PORT_ANY
+#define VMADDR_CID_ANY LINUX_VMADDR_CID_ANY
+#include "vsock_address.hpp"
+#include "vsock_listener.hpp"
+#undef sockaddr_vm
+#undef VMADDR_CID_ANY
+#undef VMADDR_PORT_ANY
+#endif
+
 #if defined ZMQ_HAVE_VMCI
 #include "vmci_address.hpp"
 #include "vmci_listener.hpp"
 #endif
+
 
 #ifdef ZMQ_HAVE_OPENPGM
 #include "pgm_socket.hpp"
@@ -255,7 +242,8 @@ zmq::socket_base_t::socket_base_t (ctx_t *parent_,
     _monitor_events (0),
     _thread_safe (thread_safe_),
     _reaper_signaler (NULL),
-    _monitor_sync ()
+    _monitor_sync (),
+    _disconnected (false)
 {
     options.socket_id = sid_;
     options.ipv6 = (parent_->get (ZMQ_IPV6) != 0);
@@ -370,6 +358,9 @@ int zmq::socket_base_t::check_protocol (const std::string &protocol_) const
 #if defined ZMQ_HAVE_VMCI
         && protocol_ != protocol_name::vmci
 #endif
+#if defined ZMQ_HAVE_VSOCK
+        && protocol_ != protocol_name::vsock
+#endif
         && protocol_ != protocol_name::udp) {
         errno = EPROTONOSUPPORT;
         return -1;
@@ -460,6 +451,12 @@ int zmq::socket_base_t::getsockopt (int option_,
         return -1;
     }
 
+    //  First, check whether specific socket type overloads the option.
+    int rc = xgetsockopt (option_, optval_, optvallen_);
+    if (rc == 0 || errno != EINVAL) {
+        return rc;
+    }
+
     if (option_ == ZMQ_RCVMORE) {
         return do_getsockopt<int> (optval_, optvallen_, _rcvmore ? 1 : 0);
     }
@@ -511,6 +508,13 @@ int zmq::socket_base_t::leave (const char *group_)
     scoped_optional_lock_t sync_lock (_thread_safe ? &_sync : NULL);
 
     return xleave (group_);
+}
+
+int zmq::socket_base_t::disconnect_peer (uint32_t routing_id_)
+{
+    scoped_optional_lock_t sync_lock (_thread_safe ? &_sync : NULL);
+
+    return xdisconnect_peer (routing_id_);
 }
 
 void zmq::socket_base_t::add_signaler (signaler_t *s_)
@@ -763,6 +767,28 @@ int zmq::socket_base_t::bind (const char *endpoint_uri_)
     }
 #endif
 
+#if defined ZMQ_HAVE_VSOCK
+    if (protocol == protocol_name::vsock) {
+        vsock_listener_t *listener =
+          new (std::nothrow) vsock_listener_t (io_thread, this, options);
+        alloc_assert (listener);
+        int rc = listener->set_local_address (address.c_str ());
+        if (rc != 0) {
+            LIBZMQ_DELETE (listener);
+            event_bind_failed (make_unconnected_bind_endpoint_pair (address),
+                               zmq_errno ());
+            return -1;
+        }
+
+        listener->get_local_address (_last_endpoint);
+
+        add_endpoint (make_unconnected_bind_endpoint_pair (_last_endpoint),
+                      static_cast<own_t *> (listener), NULL);
+        options.connected = true;
+        return 0;
+    }
+#endif
+
     zmq_assert (false);
     return -1;
 }
@@ -804,16 +830,14 @@ int zmq::socket_base_t::connect_internal (const char *endpoint_uri_)
 
         // The total HWM for an inproc connection should be the sum of
         // the binder's HWM and the connector's HWM.
-        const int sndhwm = peer.socket == NULL
-                             ? options.sndhwm
-                             : options.sndhwm != 0 && peer.options.rcvhwm != 0
-                                 ? options.sndhwm + peer.options.rcvhwm
-                                 : 0;
-        const int rcvhwm = peer.socket == NULL
-                             ? options.rcvhwm
-                             : options.rcvhwm != 0 && peer.options.sndhwm != 0
-                                 ? options.rcvhwm + peer.options.sndhwm
-                                 : 0;
+        const int sndhwm = peer.socket == NULL ? options.sndhwm
+                           : options.sndhwm != 0 && peer.options.rcvhwm != 0
+                             ? options.sndhwm + peer.options.rcvhwm
+                             : 0;
+        const int rcvhwm = peer.socket == NULL ? options.rcvhwm
+                           : options.rcvhwm != 0 && peer.options.sndhwm != 0
+                             ? options.rcvhwm + peer.options.sndhwm
+                             : 0;
 
         //  Create a bi-directional pipe to connect the peers.
         object_t *parents[2] = {this, peer.socket == NULL ? this : peer.socket};
@@ -1063,6 +1087,18 @@ int zmq::socket_base_t::connect_internal (const char *endpoint_uri_)
         }
     }
 #endif
+#if defined ZMQ_HAVE_VSOCK
+    else if (protocol == protocol_name::vsock) {
+        paddr->resolved.vsock_addr =
+          new (std::nothrow) vsock_address_t (this->get_ctx ());
+        alloc_assert (paddr->resolved.vsock_addr);
+        int rc = paddr->resolved.vsock_addr->resolve (address.c_str ());
+        if (rc != 0) {
+            LIBZMQ_DELETE (paddr);
+            return -1;
+        }
+    }
+#endif
 
     //  Create session.
     session_base_t *session =
@@ -1216,6 +1252,11 @@ int zmq::socket_base_t::term_endpoint (const char *endpoint_uri_)
         term_child (it->second.first);
     }
     _endpoints.erase (range.first, range.second);
+
+    if (options.reconnect_stop & ZMQ_RECONNECT_STOP_AFTER_DISCONNECT) {
+        _disconnected = true;
+    }
+
     return 0;
 }
 
@@ -1495,14 +1536,16 @@ int zmq::socket_base_t::process_commands (int timeout_, bool throttle_)
     command_t cmd;
     int rc = _mailbox->recv (&cmd, timeout_);
 
+    if (rc != 0 && errno == EINTR)
+        return -1;
+
     //  Process all available commands.
-    while (rc == 0) {
-        cmd.destination->process_command (cmd);
+    while (rc == 0 || errno == EINTR) {
+        if (rc == 0) {
+            cmd.destination->process_command (cmd);
+        }
         rc = _mailbox->recv (&cmd, 0);
     }
-
-    if (errno == EINTR)
-        return -1;
 
     zmq_assert (errno == EAGAIN);
 
@@ -1616,6 +1659,12 @@ int zmq::socket_base_t::xsetsockopt (int, const void *, size_t)
     return -1;
 }
 
+int zmq::socket_base_t::xgetsockopt (int, void *, size_t *)
+{
+    errno = EINVAL;
+    return -1;
+}
+
 bool zmq::socket_base_t::xhas_out ()
 {
     return false;
@@ -1642,6 +1691,12 @@ int zmq::socket_base_t::xjoin (const char *group_)
 int zmq::socket_base_t::xleave (const char *group_)
 {
     LIBZMQ_UNUSED (group_);
+    errno = ENOTSUP;
+    return -1;
+}
+
+int zmq::socket_base_t::xdisconnect_peer (uint32_t)
+{
     errno = ENOTSUP;
     return -1;
 }
@@ -2049,6 +2104,11 @@ void zmq::socket_base_t::stop_monitor (bool send_monitor_stopped_event_)
         _monitor_socket = NULL;
         _monitor_events = 0;
     }
+}
+
+bool zmq::socket_base_t::is_disconnected () const
+{
+    return _disconnected;
 }
 
 zmq::routing_socket_base_t::routing_socket_base_t (class ctx_t *parent_,

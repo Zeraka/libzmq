@@ -89,7 +89,7 @@ dnl # Check whether to build documentation and install man-pages                
 dnl ##############################################################################
 AC_DEFUN([LIBZMQ_CHECK_DOC_BUILD], [{
 
-    # Man pages are built/installed if asciidoc and xmlto are present
+    # Man pages are built/installed if asciidoctor and xmlto are present
     #   --with-docs=no overrides this
     AC_ARG_WITH([docs],
         AS_HELP_STRING([--without-docs],
@@ -109,14 +109,13 @@ AC_DEFUN([LIBZMQ_CHECK_DOC_BUILD], [{
         libzmq_build_doc="yes"
         libzmq_install_man="yes"
         # Check for asciidoc and xmlto and don't build the docs if these are not installed.
-        AC_CHECK_PROG(libzmq_have_asciidoc, asciidoc, yes, no)
-        AC_CHECK_PROG(libzmq_have_xmlto, xmlto, yes, no)
-        if test "x$libzmq_have_asciidoc" = "xno" -o "x$libzmq_have_xmlto" = "xno"; then
+        AC_CHECK_PROG(libzmq_have_asciidoctor, asciidoctor, yes, no)
+        if test "x$libzmq_have_asciidoctor" = "xno"; then
             libzmq_build_doc="no"
             # Tarballs built with 'make dist' ship with prebuilt documentation.
             if ! test -f doc/zmq.7; then
                 libzmq_install_man="no"
-                AC_MSG_WARN([You are building an unreleased version of 0MQ and asciidoc or xmlto are not installed.])
+                AC_MSG_WARN([You are building an unreleased version of 0MQ and asciidoctor is not installed.])
                 AC_MSG_WARN([Documentation will not be built and manual pages will not be installed.])
             fi
         fi
@@ -871,6 +870,33 @@ int main (int argc, char *argv [])
 }])
 
 dnl ################################################################################
+dnl # LIBZMQ_CHECK_SO_PRIORITY([action-if-found], [action-if-not-found])           #
+dnl # Check if SO_PRIORITY is supported                                            #
+dnl ################################################################################
+AC_DEFUN([LIBZMQ_CHECK_SO_PRIORITY], [{
+    AC_CACHE_CHECK([whether SO_PRIORITY is supported], [libzmq_cv_so_priority],
+        [AC_TRY_RUN([/* SO_PRIORITY test */
+#include <sys/types.h>
+#include <sys/socket.h>
+
+int main (int argc, char *argv [])
+{
+    int s, rc, opt = 1;
+    return (
+        ((s = socket (PF_INET, SOCK_STREAM, 0)) == -1) ||
+        ((rc = setsockopt (s, SOL_SOCKET, SO_PRIORITY, (char*) &opt, sizeof (int))) == -1)
+    );
+}
+        ],
+        [libzmq_cv_so_priority="yes"],
+        [libzmq_cv_so_priority="no"],
+        [libzmq_cv_so_priority="not during cross-compile"]
+        )]
+    )
+    AS_IF([test "x$libzmq_cv_so_priority" = "xyes"], [$1], [$2])
+}])
+
+dnl ################################################################################
 dnl # LIBZMQ_CHECK_GETRANDOM([action-if-found], [action-if-not-found])  #
 dnl # Checks if getrandom is supported                                  #
 dnl ################################################################################
@@ -1043,6 +1069,32 @@ select(1, &t_rfds, 0, 0, &tv);
 }])
 
 dnl ################################################################################
+dnl # LIBZMQ_CHECK_PSELECT([action-if-found], [action-if-not-found])               #
+dnl # Checks pselect polling system                                                #
+dnl ################################################################################
+AC_DEFUN([LIBZMQ_CHECK_PSELECT], [{
+    AC_LINK_IFELSE([
+        AC_LANG_PROGRAM([
+#include <sys/select.h>
+#include <signal.h>
+        ],[[
+fd_set t_rfds;
+struct timespec ts;
+FD_ZERO(&t_rfds);
+FD_SET(0, &t_rfds);
+ts.tv_sec = 5;
+ts.tv_nsec = 0;
+sigset_t sigmask, sigmask_without_sigterm;
+sigemptyset(&sigmask);
+sigprocmask(SIG_BLOCK, &sigmask, &sigmask_without_sigterm);
+
+pselect(1, &t_rfds, 0, 0, &ts, &sigmask);
+        ]])],
+        [$1],[$2]
+    )
+}])
+
+dnl ################################################################################
 dnl # LIBZMQ_CHECK_POLLER([action-if-found], [action-if-not-found])                #
 dnl # Choose polling system                                                        #
 dnl ################################################################################
@@ -1170,6 +1222,27 @@ AC_DEFUN([LIBZMQ_CHECK_POLLER], [{
 	fi
 }])
 
+dnl ################################################################################
+dnl # LIBZMQ_CHECK_PPOLL([action-if-found], [action-if-not-found])                 #
+dnl # Check whether zmq_ppoll can be activated, and do so if it can                #
+dnl ################################################################################
+
+AC_DEFUN([LIBZMQ_CHECK_PPOLL], [{
+    AC_REQUIRE([AC_CANONICAL_HOST])
+
+    case "${host_os}" in
+        *mingw*|*cygwin*|*msys*)
+            # Disable ppoll by default on Windows
+            AC_MSG_NOTICE([NOT building active zmq_ppoll on '$host_os']) ;;
+        *)
+            LIBZMQ_CHECK_PSELECT([
+                AC_MSG_NOTICE([Building with zmq_ppoll])
+                AC_DEFINE(ZMQ_HAVE_PPOLL, 1, [Build with zmq_ppoll])
+            ])
+        ;;
+    esac
+}])
+
 dnl ##############################################################################
 dnl # LIBZMQ_CHECK_CACHELINE                                                     #
 dnl # Check cacheline size for alignment purposes                                #
@@ -1180,11 +1253,16 @@ AC_DEFUN([LIBZMQ_CHECK_CACHELINE], [{
     AC_CHECK_TOOL(libzmq_getconf, getconf)
     if ! test "x$libzmq_getconf" = "x"; then
         zmq_cacheline_size=$($libzmq_getconf LEVEL1_DCACHE_LINESIZE 2>/dev/null || echo 64)
-        if test "x$zmq_cacheline_size" = "x0" -o  "x$zmq_cacheline_size" = "x-1"; then
+        if test "x$zmq_cacheline_size" = "x0" -o  "x$zmq_cacheline_size" = "x-1" -o "x$zmq_cacheline_size" = "xundefined"; then
             # getconf on some architectures does not know the size, try to fallback to
             # the value the kernel knows on Linux
             zmq_cacheline_size=$(cat /sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size 2>/dev/null || echo 64)
         fi
+    fi
+    if test "x$zmq_cacheline_size" = "xundefined"; then
+        # On some platforms e.g. Fedora33 s390x the cacheline size reported
+        # by getconf as 'undefined'.
+        zmq_cacheline_size=64
     fi
 	AC_MSG_NOTICE([Using "$zmq_cacheline_size" bytes alignment for lock-free data structures])
 	AC_DEFINE_UNQUOTED(ZMQ_CACHELINE_SIZE, $zmq_cacheline_size, [Using "$zmq_cacheline_size" bytes alignment for lock-free data structures])

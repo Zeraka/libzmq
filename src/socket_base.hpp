@@ -1,31 +1,4 @@
-/*
-    Copyright (c) 2007-2016 Contributors as noted in the AUTHORS file
-
-    This file is part of libzmq, the ZeroMQ core engine in C++.
-
-    libzmq is free software; you can redistribute it and/or modify it under
-    the terms of the GNU Lesser General Public License (LGPL) as published
-    by the Free Software Foundation; either version 3 of the License, or
-    (at your option) any later version.
-
-    As a special exception, the Contributors give you permission to link
-    this library with independent modules to produce an executable,
-    regardless of the license terms of these independent modules, and to
-    copy and distribute the resulting executable under terms of your choice,
-    provided that you also meet, for each linked independent module, the
-    terms and conditions of the license of that module. An independent
-    module is a module which is not derived from or based on this library.
-    If you modify this library, you must extend this exception to your
-    version of the library.
-
-    libzmq is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public
-    License for more details.
-
-    You should have received a copy of the GNU Lesser General Public License
-    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*/
+/* SPDX-License-Identifier: MPL-2.0 */
 
 #ifndef __ZMQ_SOCKET_BASE_HPP_INCLUDED__
 #define __ZMQ_SOCKET_BASE_HPP_INCLUDED__
@@ -165,6 +138,11 @@ class socket_base_t : public own_t,
     //  be enabled.
     int query_pipes_stats ();
 
+    bool is_disconnected () const;
+
+    // Disconnect a specific peer given its routing id. Default ENOTSUP.
+    int disconnect_peer (uint32_t routing_id_);
+
   protected:
     socket_base_t (zmq::ctx_t *parent_,
                    uint32_t tid_,
@@ -184,6 +162,11 @@ class socket_base_t : public own_t,
     virtual int
     xsetsockopt (int option_, const void *optval_, size_t optvallen_);
 
+    //  The default implementation assumes there are no specific socket
+    //  options for the particular socket type. If not so, ZMQ_FINAL this
+    //  method.
+    virtual int xgetsockopt (int option_, void *optval_, size_t *optvallen_);
+
     //  The default implementation assumes that send is not supported.
     virtual bool xhas_out ();
     virtual int xsend (zmq::msg_t *msg_);
@@ -201,6 +184,9 @@ class socket_base_t : public own_t,
     //  the default implementation assumes that joub and leave are not supported.
     virtual int xjoin (const char *group_);
     virtual int xleave (const char *group_);
+
+    // Default implementation returns ENOTSUP. Specific sockets may override.
+    virtual int xdisconnect_peer (uint32_t routing_id_);
 
     //  Delay actual destruction of the socket.
     void process_destroy () ZMQ_FINAL;
@@ -345,6 +331,9 @@ class socket_base_t : public own_t,
     mutex_t _monitor_sync;
 
     ZMQ_NON_COPYABLE_NOR_MOVABLE (socket_base_t)
+
+    // Add a flag for mark disconnect action
+    bool _disconnected;
 };
 
 class routing_socket_base_t : public socket_base_t

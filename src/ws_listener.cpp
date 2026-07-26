@@ -1,31 +1,4 @@
-/*
-    Copyright (c) 2007-2019 Contributors as noted in the AUTHORS file
-
-    This file is part of libzmq, the ZeroMQ core engine in C++.
-
-    libzmq is free software; you can redistribute it and/or modify it under
-    the terms of the GNU Lesser General Public License (LGPL) as published
-    by the Free Software Foundation; either version 3 of the License, or
-    (at your option) any later version.
-
-    As a special exception, the Contributors give you permission to link
-    this library with independent modules to produce an executable,
-    regardless of the license terms of these independent modules, and to
-    copy and distribute the resulting executable under terms of your choice,
-    provided that you also meet, for each linked independent module, the
-    terms and conditions of the license of that module. An independent
-    module is a module which is not derived from or based on this library.
-    If you modify this library, you must extend this exception to your
-    version of the library.
-
-    libzmq is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public
-    License for more details.
-
-    You should have received a copy of the GNU Lesser General Public License
-    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*/
+/* SPDX-License-Identifier: MPL-2.0 */
 
 #include "precompiled.hpp"
 #include <new>
@@ -70,13 +43,12 @@ zmq::ws_listener_t::ws_listener_t (io_thread_t *io_thread_,
                                    socket_base_t *socket_,
                                    const options_t &options_,
                                    bool wss_) :
-    stream_listener_base_t (io_thread_, socket_, options_),
-    _wss (wss_)
+    stream_listener_base_t (io_thread_, socket_, options_), _wss (wss_)
 {
 #ifdef ZMQ_HAVE_WSS
     if (_wss) {
         int rc = gnutls_certificate_allocate_credentials (&_tls_cred);
-        assert (rc == GNUTLS_E_SUCCESS);
+        zmq_assert (rc == GNUTLS_E_SUCCESS);
 
         gnutls_datum_t cert = {(unsigned char *) options_.wss_cert_pem.c_str (),
                                (unsigned int) options_.wss_cert_pem.length ()};
@@ -84,7 +56,7 @@ zmq::ws_listener_t::ws_listener_t (io_thread_t *io_thread_,
                               (unsigned int) options_.wss_key_pem.length ()};
         rc = gnutls_certificate_set_x509_key_mem (_tls_cred, &cert, &key,
                                                   GNUTLS_X509_FMT_PEM);
-        assert (rc == GNUTLS_E_SUCCESS);
+        zmq_assert (rc == GNUTLS_E_SUCCESS);
     }
 #endif
 }
@@ -294,6 +266,10 @@ zmq::fd_t zmq::ws_listener_t::accept ()
     if (options.tos != 0)
         set_ip_type_of_service (sock, options.tos);
 
+    // Set the protocol-defined priority for this client socket
+    if (options.priority != 0)
+        set_socket_priority (sock, options.priority);
+
     return sock;
 }
 
@@ -310,7 +286,7 @@ void zmq::ws_listener_t::create_engine (fd_t fd_)
           wss_engine_t (fd_, options, endpoint_pair, _address, false, _tls_cred,
                         std::string ());
 #else
-        assert (false);
+        zmq_assert (false);
 #endif
     else
         engine = new (std::nothrow)

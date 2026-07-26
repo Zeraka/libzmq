@@ -1,31 +1,4 @@
-/*
-    Copyright (c) 2007-2017 Contributors as noted in the AUTHORS file
-
-    This file is part of libzmq, the ZeroMQ core engine in C++.
-
-    libzmq is free software; you can redistribute it and/or modify it under
-    the terms of the GNU Lesser General Public License (LGPL) as published
-    by the Free Software Foundation; either version 3 of the License, or
-    (at your option) any later version.
-
-    As a special exception, the Contributors give you permission to link
-    this library with independent modules to produce an executable,
-    regardless of the license terms of these independent modules, and to
-    copy and distribute the resulting executable under terms of your choice,
-    provided that you also meet, for each linked independent module, the
-    terms and conditions of the license of that module. An independent
-    module is a module which is not derived from or based on this library.
-    If you modify this library, you must extend this exception to your
-    version of the library.
-
-    libzmq is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public
-    License for more details.
-
-    You should have received a copy of the GNU Lesser General Public License
-    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*/
+/* SPDX-License-Identifier: MPL-2.0 */
 
 #include "testutil.hpp"
 #include "testutil_unity.hpp"
@@ -41,11 +14,6 @@ void test_fair_queue_in (const char *bind_address_)
 {
     char connect_address[MAX_SOCKET_STRING];
     void *receiver = test_context_socket (ZMQ_ROUTER);
-
-    int timeout = 250;
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zmq_setsockopt (receiver, ZMQ_RCVTIMEO, &timeout, sizeof (int)));
-
     TEST_ASSERT_SUCCESS_ERRNO (zmq_bind (receiver, bind_address_));
     size_t len = MAX_SOCKET_STRING;
     TEST_ASSERT_SUCCESS_ERRNO (
@@ -55,9 +23,6 @@ void test_fair_queue_in (const char *bind_address_)
     void *senders[services];
     for (unsigned char peer = 0; peer < services; ++peer) {
         senders[peer] = test_context_socket (ZMQ_DEALER);
-
-        TEST_ASSERT_SUCCESS_ERRNO (
-          zmq_setsockopt (senders[peer], ZMQ_RCVTIMEO, &timeout, sizeof (int)));
 
         char *str = strdup ("A");
         str[0] += peer;
@@ -176,7 +141,10 @@ void test_destroy_queue_on_disconnect (const char *bind_address_)
 }
 
 #define TEST_SUITE(name, bind_address)                                         \
-    void test_fair_queue_in_##name () { test_fair_queue_in (bind_address); }   \
+    void test_fair_queue_in_##name ()                                          \
+    {                                                                          \
+        test_fair_queue_in (bind_address);                                     \
+    }                                                                          \
     void test_destroy_queue_on_disconnect_##name ()                            \
     {                                                                          \
         test_destroy_queue_on_disconnect (bind_address);                       \
